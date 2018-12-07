@@ -16,8 +16,9 @@ ANSIBLE_METADATA = {'metadata_version': '1.1',
 
 DOCUMENTATION = r'''
 ---
-module: find
-author: Brian Coca (based on Ruggero Marchei's Tidy)
+
+module: findx
+author: Rockie Yang (based on Brian Coca (based on Ruggero Marchei's Tidy))
 version_added: "2.0"
 short_description: Return a list of files based on specific criteria
 description:
@@ -107,6 +108,7 @@ options:
               to false will override this value, which is effectively depth 1.
               Default is unlimited depth.
         version_added: "2.6"
+    configs:
 notes:
     - For Windows targets, use the M(win_find) module instead.
 '''
@@ -209,7 +211,8 @@ import stat
 import sys
 import time
 
-from ansible.module_utils.basic import AnsibleModule
+
+from ansible.module_utils.basic import *
 
 
 def pfilter(f, patterns=None, excludes=None, use_regex=False):
@@ -313,37 +316,91 @@ def statinfo(st):
         pass
 
     return {
-        'mode': "%04o" % stat.S_IMODE(st.st_mode),
-        'isdir': stat.S_ISDIR(st.st_mode),
-        'ischr': stat.S_ISCHR(st.st_mode),
-        'isblk': stat.S_ISBLK(st.st_mode),
-        'isreg': stat.S_ISREG(st.st_mode),
-        'isfifo': stat.S_ISFIFO(st.st_mode),
-        'islnk': stat.S_ISLNK(st.st_mode),
-        'issock': stat.S_ISSOCK(st.st_mode),
+        # 'mode': "%04o" % stat.S_IMODE(st.st_mode),
+
+        # by RockieYang: to capture all mode information
+        'mode': oct(st.st_mode),
+
+        # by RockieYang: The following information can be derived from mode
+        # 'isdir': stat.S_ISDIR(st.st_mode),
+        # 'ischr': stat.S_ISCHR(st.st_mode),
+        # 'isblk': stat.S_ISBLK(st.st_mode),
+        # 'isreg': stat.S_ISREG(st.st_mode),
+        # 'isfifo': stat.S_ISFIFO(st.st_mode),
+        # 'islnk': stat.S_ISLNK(st.st_mode),
+        # 'issock': stat.S_ISSOCK(st.st_mode),
         'uid': st.st_uid,
         'gid': st.st_gid,
         'size': st.st_size,
         'inode': st.st_ino,
         'dev': st.st_dev,
         'nlink': st.st_nlink,
-        'atime': st.st_atime,
-        'mtime': st.st_mtime,
-        'ctime': st.st_ctime,
+
+        # by findx: different with official, using int to save space
+        'atime': int(st.st_atime),
+        'mtime': int(st.st_mtime),
+        'ctime': int(st.st_ctime),
+
         'gr_name': gr_name,
         'pw_name': pw_name,
-        'wusr': bool(st.st_mode & stat.S_IWUSR),
-        'rusr': bool(st.st_mode & stat.S_IRUSR),
-        'xusr': bool(st.st_mode & stat.S_IXUSR),
-        'wgrp': bool(st.st_mode & stat.S_IWGRP),
-        'rgrp': bool(st.st_mode & stat.S_IRGRP),
-        'xgrp': bool(st.st_mode & stat.S_IXGRP),
-        'woth': bool(st.st_mode & stat.S_IWOTH),
-        'roth': bool(st.st_mode & stat.S_IROTH),
-        'xoth': bool(st.st_mode & stat.S_IXOTH),
-        'isuid': bool(st.st_mode & stat.S_ISUID),
-        'isgid': bool(st.st_mode & stat.S_ISGID),
+
+        # by findx: The following attribute can be derived from mode
+        # 'wusr': bool(st.st_mode & stat.S_IWUSR),
+        # 'rusr': bool(st.st_mode & stat.S_IRUSR),
+        # 'xusr': bool(st.st_mode & stat.S_IXUSR),
+        # 'wgrp': bool(st.st_mode & stat.S_IWGRP),
+        # 'rgrp': bool(st.st_mode & stat.S_IRGRP),
+        # 'xgrp': bool(st.st_mode & stat.S_IXGRP),
+        # 'woth': bool(st.st_mode & stat.S_IWOTH),
+        # 'roth': bool(st.st_mode & stat.S_IROTH),
+        # 'xoth': bool(st.st_mode & stat.S_IXOTH),
+        # 'isuid': bool(st.st_mode & stat.S_ISUID),
+        # 'isgid': bool(st.st_mode & stat.S_ISGID),
+
+        # by findx: added those items
+        'lnk_source': "",
+        'checksum': ""
     }
+
+
+keys = [
+    'mode',
+    'uid',
+    'gid',
+    'size',
+    'inode',
+    'dev',
+    'nlink',
+    'atime',
+    'mtime',
+    'ctime',
+    'gr_name',
+    'pw_name',
+    'checksum',
+    'path',
+    'lnk_source']
+
+# by RockieYang: For debug
+# f = open("/tmp/ansible.log", "w")
+
+
+def append_to_result(filelist, r):
+    # f.write("r is " + str(r) + "\n")
+    result = [str(r[key]) for key in keys]
+    # f.write("result is " + str(result) + "\n")
+    # f.flush()
+
+    filelist.append({'stat': ";".join(result)})
+
+
+def safe_sha1(module, st, fsname):
+    try:
+        if st.st_size > 8:
+            return module.sha1(fsname)
+        else:
+            return ""
+    except Exception as ex:
+        return ""
 
 
 def main():
@@ -363,6 +420,8 @@ def main():
             get_checksum=dict(type='bool', default='no'),
             use_regex=dict(type='bool', default='no'),
             depth=dict(type='int', default=None),
+            # by RockieYang: Add one more configuration, in hierachy format
+            # configs=dict(type="json")
         ),
         supports_check_mode=True,
     )
@@ -370,6 +429,10 @@ def main():
     params = module.params
 
     filelist = []
+
+    # by RockieYang: print(params["configs"])
+    # configs = params["configs"]
+    # print(configs)
 
     if params['age'] is None:
         age = None
@@ -399,7 +462,7 @@ def main():
     for npath in params['paths']:
         npath = os.path.expanduser(os.path.expandvars(npath))
         if os.path.isdir(npath):
-            ''' ignore followlinks for python version < 2.6 '''
+            """ ignore followlinks for python version < 2.6 """
             for root, dirs, files in (sys.version_info < (2, 6, 0) and os.walk(npath)) or os.walk(npath, followlinks=params['follow']):
                 if params['depth']:
                     depth = root.replace(npath.rstrip(os.path.sep), '').count(os.path.sep)
@@ -417,6 +480,8 @@ def main():
 
                     try:
                         st = os.lstat(fsname)
+                        # f.write(st)
+                        # f.write("\n")
                     except Exception:
                         msg += "%s was skipped as it does not seem to be a valid file or it cannot be accessed\n" % fsname
                         continue
@@ -426,15 +491,22 @@ def main():
                         if pfilter(fsobj, params['patterns'], params['excludes'], params['use_regex']) and agefilter(st, now, age, params['age_stamp']):
 
                             r.update(statinfo(st))
+                            # by RockieYang: Track link source
+                            if stat.S_ISLNK(st.st_mode):
+                                r['lnk_source'] = os.path.realpath(fsname)
+
                             if stat.S_ISREG(st.st_mode) and params['get_checksum']:
-                                r['checksum'] = module.sha1(fsname)
-                            filelist.append(r)
+                                r['checksum'] = safe_sha1(module, st, fsname)
+
+                            # filelist.append(r)
+                            append_to_result(filelist, r)
 
                     elif stat.S_ISDIR(st.st_mode) and params['file_type'] == 'directory':
                         if pfilter(fsobj, params['patterns'], params['excludes'], params['use_regex']) and agefilter(st, now, age, params['age_stamp']):
 
                             r.update(statinfo(st))
-                            filelist.append(r)
+                            # filelist.append(r)
+                            append_to_result(filelist, r)
 
                     elif stat.S_ISREG(st.st_mode) and params['file_type'] == 'file':
                         if pfilter(fsobj, params['patterns'], params['excludes'], params['use_regex']) and \
@@ -442,15 +514,23 @@ def main():
                                 sizefilter(st, size) and contentfilter(fsname, params['contains']):
 
                             r.update(statinfo(st))
-                            if params['get_checksum']:
-                                r['checksum'] = module.sha1(fsname)
-                            filelist.append(r)
+                            if stat.S_ISLNK(st.st_mode):
+                                r['lnk_source'] = os.path.realpath(fsname)
+
+                            if stat.S_ISREG(st.st_mode) and params['get_checksum']:
+                                r['checksum'] = safe_sha1(module, st, fsname)
+
+                            # filelist.append(r)
+                            append_to_result(filelist, r)
 
                     elif stat.S_ISLNK(st.st_mode) and params['file_type'] == 'link':
                         if pfilter(fsobj, params['patterns'], params['excludes'], params['use_regex']) and agefilter(st, now, age, params['age_stamp']):
 
                             r.update(statinfo(st))
-                            filelist.append(r)
+
+
+                            # filelist.append(r)
+                            append_to_result(filelist, r)
 
                 if not params['recurse']:
                     break
